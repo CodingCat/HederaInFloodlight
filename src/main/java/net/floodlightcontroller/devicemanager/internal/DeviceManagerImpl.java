@@ -824,9 +824,15 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                     DHCP dhcp = (DHCP)udp.getPayload();
                     if (dhcp.getOpCode() == DHCP.OPCODE_REPLY) {
                         return ipv4.getSourceAddress();
+                    } else {
+                        logger.debug("NOT DHCP REPLY");
                     }
+                } else {
+                    logger.debug("NOT DHCP");
                 }
-            }
+            } else logger.debug("NOT UDP");
+        } else {
+            logger.debug("NOT IPV4");
         }
         return 0;
     }
