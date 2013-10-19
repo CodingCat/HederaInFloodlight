@@ -4,6 +4,7 @@ import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFSwitch;
 import net.floodlightcontroller.core.annotations.LogMessageDoc;
+import net.floodlightcontroller.core.module.FloodlightModuleContext;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.forwarding.Forwarding;
 import net.floodlightcontroller.packet.Ethernet;
@@ -23,9 +24,9 @@ public class Hedera extends Forwarding implements IFloodlightModule {
         HashMap<byte[], Boolean> convergeFlag = new HashMap<byte[], Boolean>();
     }
 
-
-
     class TrafficEstimation implements Runnable {
+
+        private boolean allflowconverged = false;
 
         private void estimateSource(Map.Entry<byte[], matrixElement> sourceRecord) {
             double convergedDemand = 0.0;
@@ -48,14 +49,64 @@ public class Hedera extends Forwarding implements IFloodlightModule {
         }
 
         private void estimateDestination(Map.Entry<byte[], matrixElement> destinationRecord) {
-
+            double totaldemand = 0.0;
+            double senderlimitdemand = 0.0;
+            int receiverlimitflownum = 0;
+            HashMap<byte[], Boolean> flowreceiverLimited = new HashMap<byte[], Boolean>();
+            for (Map.Entry<byte[], Double> source :
+                    destinationRecord.getValue().flowdemands.entrySet()) {
+                flowreceiverLimited.put(source.getKey(), true);
+                totaldemand += source.getValue();
+                receiverlimitflownum += 1;
+            }
+            if (totaldemand < 1) return;
+            double estimatedDemand = totaldemand / receiverlimitflownum;
+            boolean findreceiverlimitedflow = false;
+            do {
+                receiverlimitflownum = 0;
+                for (Map.Entry<byte[], Double> source :
+                        destinationRecord.getValue().flowdemands.entrySet()) {
+                    if (!flowreceiverLimited.containsKey(source.getKey())) continue;
+                    if (source.getValue() < estimatedDemand) {
+                        senderlimitdemand += source.getValue();
+                        flowreceiverLimited.remove(source.getKey());
+                        findreceiverlimitedflow = true;
+                    } else {
+                        receiverlimitflownum += 1;
+                    }
+                }
+                estimatedDemand = (totaldemand - senderlimitdemand) / receiverlimitflownum;
+            } while (findreceiverlimitedflow);
+            for (Map.Entry<byte[], Double> source :
+                    destinationRecord.getValue().flowdemands.entrySet()) {
+                sourceFlowMap.get(source.getKey()).convergeFlag.put(
+                        destinationRecord.getKey(), true);
+                if (estimatedDemand !=
+                        sourceFlowMap.get(source.getKey()).flowdemands.get(destinationRecord.getKey())) {
+                    allflowconverged = false;
+                }
+                sourceFlowMap.get(source.getKey()).flowdemands.put(
+                        destinationRecord.getKey(), estimatedDemand);
+            }
         }
 
         @Override
         public void run() {
-            for (Map.Entry<byte[], matrixElement> sourceRecord : sourceFlowMap.entrySet()) {
-                estimateSource(sourceRecord);
-                //foreach source
+            while (!allflowconverged) {
+                try {
+                    Thread.sleep(1000 * 10);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+                }
+                allflowconverged = true;
+                for (Map.Entry<byte[], matrixElement> sourceRecord : sourceFlowMap.entrySet()) {
+                    estimateSource(sourceRecord);
+                    //foreach source
+                }
+                for (Map.Entry<byte[], matrixElement> destinationRecord : destinationFlowMap.entrySet()) {
+                    estimateDestination(destinationRecord);
+                    //foreach source
+                }
             }
         }
     }
@@ -136,5 +187,13 @@ public class Hedera extends Forwarding implements IFloodlightModule {
         }
 
         return Command.CONTINUE;
+    }
+
+    @Override
+    public void startUp(FloodlightModuleContext context) {
+        super.startUp();
+        //start estimation thread
+        Thread t = new Thread(new TrafficEstimation());
+        t.start();
     }
 }
